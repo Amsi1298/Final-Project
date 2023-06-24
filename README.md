@@ -6,4 +6,4 @@ command 4: loading config file to presto - entering on presto shell - source ./p
 run the simulation by the "play" button on the GUI of Presto. 
 after the simulation running end -the results will automatically be loaded to the same GUI - waveforms and measurements.
 
-גכ
+

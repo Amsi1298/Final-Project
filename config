@@ -1,0 +1,655 @@
+# presto persistency file Thu Jan 12 15:25:42 IST 2023
+# Intel Confidential Information. Copyright Intel Corporation All Rights Reserved
+proc prs_commands { build_path } {
+prs_build -cell top_slice -view sn -path $build_path  -stdlib
+##############################
+#   setup
+##############################
+set_setup -type String -value $::env(WORK)/presto/top_slice_exp1 main_expr_name
+set_setup -type String -value /$::env(INTEL_PDK_VER)/p1278_3.xskew.expanded.scs scs_upf
+set_setup -type String -value /$::env(INTEL_PDK_VER)/p1278_3.dummy.upf upf
+set_setup -value =myvcc vcc
+set_setup -value 0.0 vss
+set_setup -value =mytemp Temp
+
+# To model diff/tcn resistance- also capacitance so we double counting so for now we are cancel it 
+set_setup -value /nfs/iil/disks/sramcoe/sramcoe/1278p3/spectre/DevPar.enable.cmi.txt simulator_options
+
+set_simulation_default simargs {+preset=cx +mt=8 +fastdc=2}
+
+##############################
+#   choosing mode (read_st/read_per/write_per/power_leak)
+##############################
+
+set mode power_leak
+if {$mode == "read_st"} { prs_title "read_st" 
+set_setup -type String -value sram_rxfs_logic_tttt skew}
+
+if {$mode == "read_per"} { prs_title "read_per" 
+set_setup -type String -value sram_rssf_logic_tttt skew}
+
+if {$mode == "write_per"} { prs_title "write_per" 
+set_setup -type String -value sram_rxsf_logic_tttt skew}
+
+if {$mode == "power_leak"} { prs_title "power_leak" 
+set_setup -type String -value sram_tttt_logic_tttt skew}
+
+# rssf: N weak, P typical, temp 100, sigma 6.35.
+
+set memcell top_slice/bitcell[255]
+
+set date [exec date +%d%b_%H_%M_%S]
+set_experiment -name ${mode}_$date 
+##############################
+#   Parameters
+##############################
+set_property top_slice/rrwlfast value =rfast
+set_property top_slice/rrwlin   value =rslow
+set_property top_slice/rrwlslow value =rslow
+set_property top_slice/ccwlfast value =cwlfast
+set_property top_slice/i_wrdata_drv/ccapnvss value =cnvss
+
+foreach inst [inst_get_elems {{myhccbitcell}/cc_wl}] {
+    puts $inst
+    set_property $inst value =cwl
+}
+
+
+set_property top_slice/bitcell[255]/rr_bl value =r_bl
+set_property top_slice/bitcell[255]/rr_bl_b value =r_bl
+set_property top_slice/bitcell[255]/rr_wl value =r_wl
+
+
+#Cap
+set_parameter -discrete =0.1fF cwlfast
+set_parameter -discrete 1.3e-16 cwl
+set_parameter -discrete 4e-15 cnvss
+
+#Res
+set_parameter -discrete 1e9 rfast
+set_parameter -discrete 0.001   rslow
+set_parameter -discrete 6.7 r_bl
+set_parameter -discrete 1.47 r_wl
+
+
+#Time
+
+#wRITE OR READ PERFORMANCE 
+set_parameter -discrete =800ps t_pwl_wl
+set_parameter -discrete =t_pwl_wl*1.25 t_stop
+
+set_parameter -discrete =100ps t_rise_wl
+set_parameter -discrete =250ps t_kick
+set_parameter -discrete =50ps t_slope
+set_parameter -discrete =t_rise_wl+t_kick t_rise_kick
+set_parameter -discrete =t_rise_wl+t_kick+t_slope t_slope_kick
+set_parameter -discrete =t_pwl_wl+t_rise_wl t_fall_wl
+#set_parameter -discrete 0 t_saenn
+set_parameter -discrete 0 t_fall_saenn
+set_parameter -discrete 0 t_rise_saenn
+
+#Temp
+set_parameter -discrete 100 mytemp
+
+switch -regexp $mode {
+
+"^write" {
+set_parameter -start 0.48 -incr 0.01 -last 0.65 myvcc
+set_parameter -discrete =t_pwl_wl*2 t_stop
+set_parameter -discrete =500ps t_pwl_wl
+}
+
+"^read_st" {
+
+set_parameter -start 0.45 -incr 0.01 -last 0.55 myvcc
+set_parameter -discrete =2000ps t_pwl_wl
+set_parameter -discrete =t_pwl_wl*1.5 t_stop
+set_parameter -discrete 0.001 rfast
+set_parameter -discrete 1e9   rslow
+set_parameter -discrete =10fF cwlfast
+
+}
+
+"^read_per" {
+set_parameter -start 7e-11 -incr 1e-11 -last 1.5e-10 t_saenn
+set_parameter -discrete =t_fall_wl+t_saenn-100ps t_fall_saenn
+set_parameter -discrete =3*t_rise_wl+t_saenn t_rise_saenn
+set_parameter -discrete {0.53} myvcc
+}
+
+"^power_leak" {
+set_parameter -discrete {0.55 0.65 0.85 1.1 1.2} myvcc
+set_parameter -discrete =10e-9 t_stop
+set_parameter -discrete =0.95*t_stop t_sample
+}
+
+}
+
+
+##############################
+#   stimuli
+##############################
+
+set_wave -type v -shape pwl -dc 0.0 -pwl {
+0.0 =myvcc  
+=t_rise_wl =myvcc  
+=t_rise_kick =myvcc  
+=t_slope_kick =vss() 
+=t_fall_wl-t_rise_wl =vss() 
+=(t_fall_wl-t_rise_wl)+0.05ns =vss() 
+=t_fall_wl =myvcc  
+} -repeat -1.0 -real 0.0 -imaginary 0.0 v_nblkick_nn
+
+
+set_wave -type v -shape pwl -dc 0.0 -pwl { 
+0.0 =myvcc 
+=t_rise_saenn =myvcc 
+=t_rise_saenn+0.05ns =vss() 
+=t_fall_saenn =vss() 
+=t_fall_saenn+0.05ns =myvcc 
+} -repeat -1.0 -real 0.0 -imaginary 0.0 v_saenn
+
+set_wave -type v -shape pwl -dc 0.0 -pwl { 
+0.0 =myvcc 
+=t_rise_wl =myvcc  
+=t_rise_wl+0.05ns =vss() 
+=t_fall_wl =vss() 
+=t_fall_wl+50ps =myvcc  
+} -repeat -1.0 -real 0.0 -imaginary 0.0 v_wl_nn
+
+set_wave -type v -shape pwl -dc 0.0 -pwl {
+0.0 =vss()
+=t_rise_wl =vss() 
+=t_rise_wl+0.05ns =myvcc  
+=t_fall_wl =myvcc 
+=t_fall_wl+50ps =vss() 
+} -repeat -1.0 -real 0.0 -imaginary 0.0 v_wl
+
+
+set_wave -type v -shape dc -dc =myvcc  vcc
+set_wave -type v -shape dc -dc 0.0    vss
+
+##############################
+#   source
+##############################
+set_source -silent -stimuli vcc -ref_net gnd ~%vcc
+set_source -silent -stimuli vss -ref_net gnd ~%vss
+
+set_parameter -discrete 0 wllvl0
+set_parameter -discrete 1 wllvl1
+set_parameter -discrete 0 wllvl2
+set_wave -type v -shape dc -dc =wllvl0*myvcc  wllvl[0]
+set_wave -type v -shape dc -dc =wllvl1*myvcc  wllvl[1]
+set_wave -type v -shape dc -dc =wllvl2*myvcc  wllvl[2]
+set_source -stimuli {wllvl[0-2]} -bus {~:wllvl[0-2]}
+
+set_parameter -discrete 0 idin 
+set_wave -type v -shape dc -dc =idin*myvcc  idin
+set_source -silent -stimuli idin -ref_net gnd ~%idin
+
+set_parameter -discrete 1 pcnn
+set_wave -type v -shape dc -dc =pcnn*myvcc  pcnn
+set_source -silent -stimuli pcnn -ref_net gnd ~%pcnn
+
+set_parameter -discrete 1 slpennn
+set_wave -type v -shape dc -dc =slpennn*myvcc  slpennn
+set_source -silent -stimuli slpennn -ref_net gnd ~%slpennn
+
+set_parameter -discrete 0 wrclk
+set_wave -type v -shape dc -dc =wrclk*myvcc  wrclk
+set_source -silent -stimuli wrclk -ref_net gnd ~%wrclk
+
+set_source -stimuli vcc {top_slice%wlenn[0]}
+set_source -stimuli vcc {top_slice%wlenn[1]}
+set_source -stimuli vcc {top_slice%wlenn[2]}
+set_source -stimuli v_wl_nn {top_slice%wlenn[3]}
+
+set_source -stimuli vss {top_slice%hi[0]}
+set_source -stimuli vss {top_slice%hi[1]}
+set_source -stimuli vss {top_slice%hi[2]}
+set_source -stimuli vcc {top_slice%hi[3]}
+
+set_source -stimuli vss {top_slice%mid[0]}
+set_source -stimuli vss {top_slice%mid[1]}
+set_source -stimuli vss {top_slice%mid[2]}
+set_source -stimuli vss {top_slice%mid[3]}
+set_source -stimuli vss {top_slice%mid[4]}
+set_source -stimuli vss {top_slice%mid[5]}
+set_source -stimuli vss {top_slice%mid[6]}
+set_source -stimuli vcc {top_slice%mid[7]}
+
+switch -regexp $mode {
+
+"^power_leak" {
+
+#assists
+    set_source -silent -stimuli vcc -ref_net gnd ~%nbl_kicknn
+
+    set_parameter -discrete 0 wllvl0
+    set_parameter -discrete 0 wllvl1
+    set_parameter -discrete 0 wllvl2
+    set_wave -type v -shape dc -dc =wllvl0*myvcc  wllvl[0]
+    set_wave -type v -shape dc -dc =wllvl1*myvcc  wllvl[1]
+    set_wave -type v -shape dc -dc =wllvl2*myvcc  wllvl[2]
+    set_source -stimuli {wllvl[0-2]} -bus {~:wllvl[0-2]}
+
+    set_parameter -discrete 1 waenn0 
+    set_parameter -discrete 1 waenn1 
+    set_parameter -discrete 1 waenn2
+    set_wave -type v -shape dc -dc =waenn0*myvcc waenn[0]
+    set_wave -type v -shape dc -dc =waenn1*myvcc waenn[1]
+    set_wave -type v -shape dc -dc =waenn2*myvcc waenn[2]
+    set_source -stimuli {waenn[0-2]} -bus {~:waenn[0-2]}
+
+#unfloating bl
+    set_parameter -discrete 0 pcnn
+    set_wave -type v -shape dc -dc =pcnn*myvcc  pcnn
+    set_source -silent -stimuli pcnn -ref_net gnd ~%pcnn
+
+    set_parameter -discrete 0 sapchnn
+    set_wave -type v -shape dc -dc =pcnn*myvcc  sapchnn 
+    set_source -silent -stimuli sapchnn  -ref_net gnd ~%sapchnn 
+
+    set_source -silent -stimuli vcc -ref_net gnd ~%saenn
+
+    set_parameter -discrete 0 slpennn
+    set_wave -type v -shape dc -dc =slpennn*myvcc  slpennn
+    set_source -silent -stimuli slpennn -ref_net gnd ~%slpennn
+
+#addresses 
+    set_source -stimuli vcc {top_slice%wlenn[0]}
+    set_source -stimuli vcc {top_slice%wlenn[1]}
+    set_source -stimuli vcc {top_slice%wlenn[2]}
+    set_source -stimuli vcc {top_slice%wlenn[3]}
+
+    set_source -stimuli vss {top_slice%hi[0]}
+    set_source -stimuli vss {top_slice%hi[1]}
+    set_source -stimuli vss {top_slice%hi[2]}
+    set_source -stimuli vss {top_slice%hi[3]}
+
+    set_source -stimuli vss {top_slice%mid[0]}
+    set_source -stimuli vss {top_slice%mid[1]}
+    set_source -stimuli vss {top_slice%mid[2]}
+    set_source -stimuli vss {top_slice%mid[3]}
+    set_source -stimuli vss {top_slice%mid[4]}
+    set_source -stimuli vss {top_slice%mid[5]}
+    set_source -stimuli vss {top_slice%mid[6]}
+    set_source -stimuli vss {top_slice%mid[7]}
+
+    set_source -silent -stimuli vss -ref_net gnd {~%rdcolsel[0]}
+    set_source -silent -stimuli vss -ref_net gnd {~%rdcolsel[1]}
+    set_source -silent -stimuli vss -ref_net gnd {~%rdcolsel[2]}
+    set_source -silent -stimuli vss -ref_net gnd {~%rdcolsel[3]}
+
+  
+    set_source -silent -stimuli vss -ref_net gnd {~%wrcolsel[0]}
+    set_source -silent -stimuli vss -ref_net gnd {~%wrcolsel[1]}
+    set_source -silent -stimuli vss -ref_net gnd {~%wrcolsel[2]}
+    set_source -silent -stimuli vss -ref_net gnd {~%wrcolsel[3]}
+
+    set_parameter -discrete 0 wren
+    set_wave -type v -shape dc -dc =wren*myvcc wren
+    set_source -silent -stimuli wren -ref_net gnd ~%wren
+}
+
+"^read_st" {
+    set_source -silent -stimuli vcc -ref_net gnd ~%nbl_kicknn
+
+    set_source -silent -stimuli vcc -ref_net gnd {~%rdcolsel[0]}
+    set_source -silent -stimuli vss -ref_net gnd {~%rdcolsel[1]}
+    set_source -silent -stimuli vss -ref_net gnd {~%rdcolsel[2]}
+    set_source -silent -stimuli vss -ref_net gnd {~%rdcolsel[3]}
+    
+    set_source -silent -stimuli vcc -ref_net gnd ~%sapchnn 
+    set_source -silent -stimuli vcc -ref_net gnd ~%saenn
+
+    set_parameter -discrete 1 waenn0 
+    set_parameter -discrete 1 waenn1 
+    set_parameter -discrete 1 waenn2
+    set_wave -type v -shape dc -dc =waenn0*myvcc waenn[0]
+    set_wave -type v -shape dc -dc =waenn1*myvcc waenn[1]
+    set_wave -type v -shape dc -dc =waenn2*myvcc waenn[2]
+    set_source -stimuli {waenn[0-2]} -bus {~:waenn[0-2]}
+    
+    set_source -silent -stimuli vss -ref_net gnd {~%wrcolsel[0]}
+    set_source -silent -stimuli vss -ref_net gnd {~%wrcolsel[1]}
+    set_source -silent -stimuli vss -ref_net gnd {~%wrcolsel[2]}
+    set_source -silent -stimuli vss -ref_net gnd {~%wrcolsel[3]}
+
+    set_parameter -discrete 0 wren
+    set_wave -type v -shape dc -dc =wren*myvcc wren
+    set_source -silent -stimuli wren -ref_net gnd ~%wren
+    }
+
+"^read_per" {
+    set_source -silent -stimuli vcc -ref_net gnd ~%nbl_kicknn
+
+    set_source -silent -stimuli vcc -ref_net gnd {~%rdcolsel[0]}
+    set_source -silent -stimuli vss -ref_net gnd {~%rdcolsel[1]}
+    set_source -silent -stimuli vss -ref_net gnd {~%rdcolsel[2]}
+    set_source -silent -stimuli vss -ref_net gnd {~%rdcolsel[3]}
+    
+    set_source -silent -stimuli vcc -ref_net gnd ~%sapchnn 
+    set_source -silent -stimuli v_saenn -ref_net gnd ~%saenn
+
+    set_parameter -discrete 1 waenn0 
+    set_parameter -discrete 1 waenn1 
+    set_parameter -discrete 1 waenn2
+    set_wave -type v -shape dc -dc =waenn0*myvcc waenn[0]
+    set_wave -type v -shape dc -dc =waenn1*myvcc waenn[1]
+    set_wave -type v -shape dc -dc =waenn2*myvcc waenn[2]
+    set_source -stimuli {waenn[0-2]} -bus {~:waenn[0-2]}
+    
+
+    set_source -silent -stimuli vss -ref_net gnd {~%wrcolsel[0]}
+    set_source -silent -stimuli vss -ref_net gnd {~%wrcolsel[1]}
+    set_source -silent -stimuli vss -ref_net gnd {~%wrcolsel[2]}
+    set_source -silent -stimuli vss -ref_net gnd {~%wrcolsel[3]}
+
+    set_parameter -discrete 0 wren
+    set_wave -type v -shape dc -dc =wren*myvcc wren
+    set_source -silent -stimuli wren -ref_net gnd ~%wren
+    }
+
+"^write_" {
+    
+    #with wa
+    set_source -silent -stimuli v_nblkick_nn -ref_net gnd ~%nbl_kicknn
+
+    #without wa
+    #set_source -silent -stimuli vcc -ref_net gnd ~%nbl_kicknn
+   
+    set_source -silent -stimuli vss -ref_net gnd {~%rdcolsel[0]}
+    set_source -silent -stimuli vss -ref_net gnd {~%rdcolsel[1]}
+    set_source -silent -stimuli vss -ref_net gnd {~%rdcolsel[2]}
+    set_source -silent -stimuli vss -ref_net gnd {~%rdcolsel[3]}
+  
+    set_source -silent -stimuli vcc -ref_net gnd ~%sapchnn
+    set_source -silent -stimuli vcc -ref_net gnd ~%saenn
+
+    #0 - wa, 1- no wa
+    set_parameter -discrete 0 waenn0 
+    set_parameter -discrete 0 waenn1 
+    set_parameter -discrete 0 waenn2
+    set_wave -type v -shape dc -dc =waenn0*myvcc  waenn[0]
+    set_wave -type v -shape dc -dc =waenn1*myvcc  waenn[1]
+    set_wave -type v -shape dc -dc =waenn2*myvcc  waenn[2]
+    set_source -stimuli {waenn[0-2]} -bus {~:waenn[0-2]}
+    
+    
+    set_source -stimuli v_wl -net {top_slice%wrcolsel[0]} {top_slice%wrcolsel[0]}
+    set_source -silent -stimuli vss -ref_net gnd {~%wrcolsel[1]}
+    set_source -silent -stimuli vss -ref_net gnd {~%wrcolsel[2]}
+    set_source -silent -stimuli vss -ref_net gnd {~%wrcolsel[3]}
+    
+
+    set_parameter -discrete 1 wren
+    set_wave -type v -shape dc -dc =wren*myvcc  wren
+    set_source -silent -stimuli wren -ref_net gnd ~%wren
+
+    }
+}
+
+
+##############################
+#   dc condition
+##############################
+switch -regexp $mode {
+
+"^power_leak" {
+
+#tested bit cell#
+set_dc_condition -silent -dc =0.0 {~/bitcell[255]:n0}
+
+#bl model#
+set_dc_condition -dc =0.0 -regexp {top_slice/i_bl_model/bitcell\[.*\]:n0} 
+
+#wl model#
+set_dc_condition -dc =0.0 -regexp {top_slice/i_wl_model/bitcell\[.*\]:n0}
+set_dc_condition -dc =myvcc -regexp {top_slice/i_wl_model:bl.*}
+
+}
+
+"^read_st" {
+#instead of precharge#
+set_dc_condition -dc =myvcc {top_slice/bitcell[255]%bl}
+set_dc_condition -dc =myvcc {top_slice/bitcell[255]%blnnin}
+
+#tested bit cell#
+set_dc_condition -silent -dc =0.0 {~/bitcell[255]:n0}
+
+#bl model#
+set_dc_condition -dc =0.0 -regexp {top_slice/i_bl_model/bitcell\[.*\]:n0} 
+
+#wl model#
+set_dc_condition -dc =0.0 -regexp {top_slice/i_wl_model/bitcell\[.*\]:n0}
+set_dc_condition -dc =myvcc -regexp {top_slice/i_wl_model:bl.*}
+
+
+}
+"^read_per" {
+#instead of precharge#
+#bitcell#
+set_dc_condition -dc =myvcc {top_slice/bitcell[255]%bl}
+set_dc_condition -dc =myvcc {top_slice/bitcell[255]%blnnin}
+#sense amp#
+set_dc_condition -dc =vcc() top_slice/i_sense_amp:inbl
+set_dc_condition -dc =vcc() top_slice/i_sense_amp:inblnn
+
+#tested bit cell#
+set_dc_condition -silent -dc =0.0 {~/bitcell[255]:n0}
+
+#bl model#
+set_dc_condition -dc =0.0 -regexp {top_slice/i_bl_model/bitcell\[.*\]:n0} 
+
+#wl model#
+set_dc_condition -dc =0.0 -regexp {top_slice/i_wl_model/bitcell\[.*\]:n0}
+set_dc_condition -dc =myvcc -regexp {top_slice/i_wl_model:bl.*}
+
+}
+
+"^write_" {
+#instead of precharge#
+set_dc_condition -dc =myvcc {top_slice/bitcell[255]%bl}
+set_dc_condition -dc =myvcc {top_slice/bitcell[255]%blnnin}
+
+#tested bit cell#
+set_dc_condition -silent -dc =myvcc {~/bitcell[255]:n0}
+
+#bl model#
+set_dc_condition -dc =0.0 -regexp {top_slice/i_bl_model/bitcell\[.*\]:n0} 
+
+#wl model#
+set_dc_condition -dc =0.0 -regexp {top_slice/i_wl_model/bitcell\[.*\]:n0}
+set_dc_condition -dc =myvcc -regexp {top_slice/i_wl_model:bl.*}
+}
+
+
+}
+##############################
+#   split
+##############################
+set_split_mode -auto -order {}
+generate_split
+##############################
+#   analysis
+##############################
+set_analysis -type tran -stepmode limit -start 0.0 -pairs {1e-12 =t_stop} -xa_level 5 -lynxspice_level 0
+##############################
+#   probe
+##############################
+
+#Voltage Probes
+set_probe -type VP {top_slice/bitcell[255]/mimxn1%g}
+set_probe -type VP {top_slice/bitcell[255]/mimxn0%g}
+set_probe -type V {top_slice/i_wl_model:wltmp[0]}
+set_probe -type V -regexp {~/bitcell\[255\]:n.}
+set_probe -type V -regexp {~:.*}
+set_probe -type V -regexp {~/i_wl_model:.*}
+set_probe -type V -regexp {~/i_sense_amp/isamp:.*}
+set_probe -type V -regexp {~/i_bl_model:.*}
+set_probe -type V -regexp {~/i_writemux:.*}
+set_probe -type V -regexp {~/i_readmux:.*}
+set_probe -type V -regexp {~/i_wrdata_drv:.*}
+set_probe -type V -regexp {~/i_blpch:.*}
+set_probe -type VP -regexp {~/i_dec%wlt\[.*\]}
+set_probe -type VP {top_slice/i_dec/i_dec32[3]/i_dec4[7]%wlet[3]}
+
+#Power Probes
+if { $mode == "power_leak" } {
+set_probe -type POW {top_slice/i_bl_model/bitcell[254]}
+set_probe -type POW top_slice/i_blpch
+set_probe -type POW top_slice/i_readmux
+set_probe -type POW top_slice/i_writemux
+set_probe -type POW top_slice/i_sense_amp
+set_probe -type POW top_slice/i_wrdata_drv
+set_probe -type POW top_slice/i_dec
+
+set_probe -type POW -regexp {top_slice/i_readmux/.*}
+set_probe -type POW -regexp {top_slice/i_wrdata_drv/.*}
+
+#Decoder Breakdowns 
+set_probe -type POW {top_slice/i_dec/i_dec32[0]/i_dec4[4]/i_dec21t/i_dec0}
+set_probe -type POW {top_slice/i_dec/i_dec32[0]/i_dec4[4]/i_dec21t/i_dec1}
+set_probe -type POW {top_slice/i_dec/i_dec32[0]/i_dec4[4]/i_dec20t/i_dec0}
+set_probe -type POW {top_slice/i_dec/i_dec32[0]/i_dec4[4]/i_dec20t/i_dec1}
+set_probe -type POW {top_slice/i_dec/i_dec32[0]/i_dec4[4]/i_decnandt}
+
+#Bl precharge
+set_probe -type POW -regexp {top_slice/i_blpch/.*}
+
+
+
+}
+
+##############################
+#   Measurements 
+##############################
+set_measurement -type expr -expression {vcc()} vcc
+
+switch -regexp $mode {
+
+"^read_st" {
+set_measurement -type expr -expression max(\"top_slice:wl_out,V\") wlmax
+set_measurement -type expr -expression { (vcc - wlmax)*100/vcc } wlud_perc
+set_measurement -type expr -expression { vcc - wlmax } wlud
+
+eval "set_measurement -type expr -expression {max(\"$memcell:n0,V\")} n0glitch"
+eval "set_measurement -type expr -expression {vcc()-min(\"$memcell:n1,V\")} n1glitch"
+set_measurement -type expr -expression {pow(n0glitch; 2)+pow(n1glitch; 2)} rdf
+set_measurement -type expr -expression sqrt(rdf/2) rdff1
+set_measurement -type expr -expression {(rdff1 > myvcc*0.96) ? NONE : rdff1 } rdff
+}
+
+"^read_per" {
+set_measurement -type expr -expression max(\"top_slice:wl_out,V\") wlmax
+set_measurement -type expr -expression { (vcc - wlmax)*100/vcc } wlud_perc
+set_measurement -type expr -expression { vcc - wlmax } wlud
+
+set_measurement -type min    -wave  top_slice:inblnn,V       min_inblnn
+set_measurement -type expr -expression {((myvcc - min_inblnn) > myvcc*0.96) ? NONE : (myvcc-min_inblnn) } inblnnv
+
+ eval "set_measurement -type expr -expression    {1e+12*delay(\"$memcell/mimxn0%g,VP\"; \"top_slice/i_sense_amp/isamp:sae,V\")} wl2sae_5050_ps"
+}
+
+"^write_" {
+set_measurement -type expr -expression max(\"top_slice:wl_out,V\") wlmax
+set_measurement -type expr -expression { (vcc - wlmax)*100/vcc } wlud_perc
+set_measurement -type expr -expression { vcc - wlmax } wlud
+
+set_measurement -type expr -expression {delay("top_slice:wl_out,V"; "top_slice/bitcell[255]:n0,V"; ref_threshold:myvcc*0.5; threshold: myvcc*0.2; condition:risefall)} wl2n0
+set_measurement -type expr -expression {delay("top_slice:wl_out,V"; "top_slice/bitcell[255]:n1,V"; ref_threshold:myvcc*0.5; threshold: myvcc*0.8; condition:riserise )} wl2n1
+set_measurement -type expr -cond_color {} -from 0.0 -expression 0-min(\"top_slice:bl_in,V\") effective_nbl
+}
+
+"^power_leak" {
+
+set_measurement -type expr -expression {1e9*value("top_slice/i_sense_amp,POW"; t_sample)} samp_pow_nW
+set_measurement -type expr -expression {1e9*value("top_slice/i_wrdata_drv,POW"; t_sample)} wrdatadrv_pow_nW
+set_measurement -type expr -expression {1e9*value("top_slice/i_blpch,POW"; t_sample)} blpch_pow_nW
+set_measurement -type expr -expression {1e9*value("top_slice/i_readmux,POW"; t_sample)} readmux_pow_nW
+set_measurement -type expr -expression {1e9*value("top_slice/i_writemux,POW"; t_sample)} writemux_pow_nW
+set_measurement -type expr -expression {1e9*value("top_slice/i_dec,POW"; t_sample)} decoder128_pow_nW
+set_measurement -type expr -expression {1e9*value("top_slice/i_bl_model/bitcell[254],POW"; t_sample)} tested_bitcell_pow_nW
+
+
+set_measurement -type expr -cond_color {} -from 0.0 -expression {1e9*value("top_slice/i_blpch/mippchinv,POW"; t_sample)} ppchinv_pow_nW
+set_measurement -type expr -cond_color {} -from 0.0 -expression {1e9*value("top_slice/i_blpch/ipchnninv/mqna,POW"; t_sample)} ippchnninv_mqna_pow_nW
+set_measurement -type expr -cond_color {} -from 0.0 -expression {1e9*value("top_slice/i_dec/i_dec32[0]/i_dec4[4]/i_decnandt,POW"; t_sample)} decoder_nandt_pow_nW
+set_measurement -type expr -expression 2*blpch_pow_nW+2*readmux_pow_nW+2*writemux_pow_nW+samp_pow_nW+wrdatadrv_pow_nW total_io_nw
+set_measurement -type expr -expression 1032*tested_bitcell_pow_nW total_bitcells_nw
+  }
+
+}
+
+##############################
+#   Nova Commands
+##############################
+package require statistics
+doe_set_settings -val YES quickreadphens
+doe_set_settings -val NO  silentreadphens
+
+if { $mode == "write_per" || $mode == "read_per" || $mode == "read_st" } {
+doe_set_settings -val p1278_3.phen phenfile
+doe_set_settings -val $::env(INTEL_PDK)/models/core/intel/$::env(LAYERSTACK)/ phensdir
+doe_set_settings -val $::env(WORK)/presto/nova/[get_experiment] workarea
+}
+
+doe_set_device_random_variable -devices $memcell/mimn0     -category nhpsrhcc7  -var_type { ghmat vt lermat}  
+doe_set_device_random_variable -devices $memcell/mimxn0    -category nhpsrhcc7  -var_type { ghmat vt lermat}
+doe_set_device_random_variable -devices $memcell/mimn1     -category nhpsrhcc7  -var_type { ghmat vt lermat}   
+doe_set_device_random_variable -devices $memcell/mimxn1    -category nhpsrhcc7  -var_type { ghmat vt lermat} 
+doe_set_device_random_variable -devices $memcell/mimp0     -category phpsrhcc7  -var_type { ghmat vt lermat}
+doe_set_device_random_variable -devices $memcell/mimp1     -category phpsrhcc7  -var_type { ghmat vt lermat} 
+
+switch -regexp $mode {
+"^read_st" {
+set_mpp_config -nb_class SLES12&&4G&&2C -mpp_type mpp2 -meas_name rdff -mpp_run readst -sigma 6.35 -nb_pool iil_normal -nb_slot /c2dg/BE/lnl/pie  -no_mpp_default 1 -nb_trials 2 -debug 0 -num_of_iter 30 -nb 0 -cmd_flag -n
+doe_set_settings -val 2 batchsize
+doe_set_device_random_variable -devices $memcell/mimn1     -category nhpsrhcc7  -var_type { ghmat vt lermat}   
+doe_set_device_random_variable -devices $memcell/mimxn1    -category nhpsrhcc7  -var_type { ghmat vt lermat} 
+doe_set_device_random_variable -devices $memcell/mimp0     -category phpsrhcc7  -var_type { ghmat vt lermat}
+doe_set_device_random_variable -devices $memcell/mimp1     -category phpsrhcc7  -var_type { ghmat vt lermat} 
+}
+"^write_" {
+set_mpp_config -nb_class SLES12&&4G&&2C -mpp_type mpp2 -meas_name wl2n0 -mpp_run writewa -sigma 6.35 -nb_pool iil_normal -nb_slot /c2dg/BE/lnl/pie  -no_mpp_default 1 -nb_trials 2 -debug 0 -num_of_iter 30 -nb 0 -cmd_flag -n
+doe_set_settings -val 2 batchsize
+doe_set_device_random_variable -devices $memcell/mimn1     -category nhpsrhcc7  -var_type { ghmat vt lermat}   
+doe_set_device_random_variable -devices $memcell/mimxn1    -category nhpsrhcc7  -var_type { ghmat vt lermat} 
+doe_set_device_random_variable -devices $memcell/mimp0     -category phpsrhcc7  -var_type { ghmat vt lermat}
+doe_set_device_random_variable -devices $memcell/mimp1     -category phpsrhcc7  -var_type { ghmat vt lermat} 
+}
+"^read_per" {
+set_mpp_config -nb_class SLES12&&4G&&2C -mpp_type mpp2 -meas_name inblnnv -mpp_run readper -sigma 6.35 -nb_pool iil_normal -nb_slot /c2dg/BE/lnl/pie  -no_mpp_default 1 -nb_trials 2 -debug 0 -num_of_iter 30 -nb 0 -cmd_flag -n
+doe_set_settings -val 2 batchsize
+
+doe_set_device_random_variable -devices top_slice/i_sense_amp/isamp/misanmosblnn -category nhpalvt -var_type { ghmat vt lermat}   
+doe_set_device_random_variable -devices top_slice/i_sense_amp/isamp/misanmosbl -category nhpalvt -var_type { ghmat vt lermat}   
+
+doe_set_device_random_variable -devices top_slice/i_sense_amp/isamp/misapchblnn -category phpasvt -var_type { ghmat vt lermat}   
+doe_set_device_random_variable -devices top_slice/i_sense_amp/isamp/misapchbl -category phpasvt -var_type { ghmat vt lermat}   
+
+doe_set_device_random_variable -devices top_slice/i_readmux/mirdmuxbl[0] -category phpasvt -var_type { ghmat vt lermat}   
+doe_set_device_random_variable -devices top_slice/i_readmux/mirdmuxblnn[0] -category phpasvt -var_type { ghmat vt lermat}   
+}
+
+}
+##############################
+#   parasitics flags
+##############################
+set_setup -value 1 Parasitics_Mode
+
+set_parasitics_mode -noic -nodev 
+# set_parasitics_config -mode hier_smashed -force_hier 1 -laos 1  -xpar {cap no_minduct} -xcaps {} -xcoupler coord -xcap_profile grounded
+
+}; #end prs_commands
+##############################
+#   Main - please don't remove from file !!!
+##############################
+set build_path $::env(WORK)/netlists/mkisp
+prs_commands $build_path
+rename prs_commands {}
+
+set ::env(PROJECT_UPF_FILE) "/nfs/iil/disks/sramcoe/sramcoe/1278p3/spectre/$::env(INTEL_PDK_VER)/p1278_3.dummy.upf"
+
+
